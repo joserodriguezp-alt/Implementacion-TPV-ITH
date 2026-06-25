@@ -1,0 +1,1206 @@
+openapi: 3.0.3
+
+info:
+  title: POS Papelería — API REST
+  version: 1.0.0
+  description: |
+    API del sistema de punto de venta para papelería.
+    Desarrollada con Node.js/Express + Supabase (PostgreSQL).
+
+    ## Autenticación
+    Todos los endpoints (salvo `/auth/login`) requieren un **JWT Bearer token**
+    obtenido desde `POST /api/auth/login`.
+
+    ```
+    Authorization: Bearer <token>
+    ```
+
+    ## Roles
+    | Rol | Permisos |
+    |---|---|
+    | `cajero` | ventas, consulta de productos e inventario |
+    | `administrador` | todo lo anterior + productos, inventario, corte de caja |
+
+    ## Formato de respuesta exitosa
+    ```json
+    { "success": true, "data": { ... } }
+    ```
+
+    ## Formato de error
+    ```json
+    { "success": false, "error": "Mensaje descriptivo" }
+    ```
+
+servers:
+  - url: http://localhost:3000/api
+    description: Desarrollo local
+  - url: http://192.168.1.100:3000/api
+    description: Red local ITH
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Security scheme
+# ──────────────────────────────────────────────────────────────────────────────
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token JWT obtenido desde POST /auth/login. Expira en 10 horas.
+
+  # ── Schemas reutilizables ────────────────────────────────────────────────────
+  schemas:
+
+    # ── Respuesta genérica ───────────────────────────────────────────────────
+    RespuestaOk:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        data:    { description: Payload de la respuesta }
+
+    Error400:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        error:   { type: string,  example: "Mensaje de validación" }
+
+    Error401:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        error:   { type: string,  example: "Token inválido o expirado" }
+
+    Error403:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        error:   { type: string,  example: "Se requiere rol administrador" }
+
+    Error404:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        error:   { type: string,  example: "Recurso no encontrado" }
+
+    Error500:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        error:   { type: string,  example: "Error interno del servidor" }
+
+    # ── Entidades del dominio ────────────────────────────────────────────────
+    Usuario:
+      type: object
+      properties:
+        id_usuario: { type: integer, example: 1 }
+        nombre:     { type: string,  example: "María López" }
+        email:      { type: string,  format: email, example: "cajero@papeleria.local" }
+        rol:
+          type: string
+          enum: [cajero, administrador]
+          example: cajero
+        activo:     { type: boolean, example: true }
+        creado_en:  { type: string,  format: date-time }
+
+    Producto:
+      type: object
+      properties:
+        id_producto:   { type: integer, example: 7 }
+        codigo_barras: { type: string,  example: "7501000000007" }
+        nombre:        { type: string,  example: "Cuaderno universitario 100 hojas" }
+        descripcion:   { type: string,  example: "Raya, pasta dura", nullable: true }
+        id_categoria:  { type: integer, example: 1, nullable: true }
+        precio_compra: { type: number,  format: decimal, example: 18.50 }
+        precio_venta:  { type: number,  format: decimal, example: 35.00 }
+        stock_actual:  { type: integer, example: 48 }
+        stock_minimo:  { type: integer, example: 10 }
+        activo:        { type: boolean, example: true }
+        creado_en:     { type: string,  format: date-time }
+        actualizado_en: { type: string,  format: date-time }
+
+    ItemVenta:
+      type: object
+      required: [id_producto, cantidad]
+      properties:
+        id_producto: { type: integer, minimum: 1, example: 7 }
+        cantidad:    { type: integer, minimum: 1, example: 2 }
+
+    DetalleVenta:
+      type: object
+      properties:
+        id_detalle:      { type: integer, example: 55 }
+        id_venta:        { type: integer, example: 12 }
+        id_producto:     { type: integer, example: 7 }
+        cantidad:        { type: integer, example: 2 }
+        precio_unitario: { type: number,  format: decimal, example: 35.00 }
+        descuento_linea: { type: number,  format: decimal, example: 0 }
+        subtotal_linea:  { type: number,  format: decimal, example: 70.00 }
+        productos:
+          type: object
+          properties:
+            nombre:        { type: string, example: "Cuaderno universitario 100 hojas" }
+            codigo_barras: { type: string, example: "7501000000007" }
+
+    Venta:
+      type: object
+      properties:
+        id_venta:           { type: integer, example: 12 }
+        folio:              { type: string,  example: "VTA-20260624-0012" }
+        fecha_hora:         { type: string,  format: date-time }
+        id_usuario:         { type: integer, example: 3 }
+        subtotal:           { type: number,  format: decimal, example: 95.50 }
+        descuento:          { type: number,  format: decimal, example: 0 }
+        total:              { type: number,  format: decimal, example: 95.50 }
+        metodo_pago:
+          type: string
+          enum: [efectivo, tarjeta, mixto]
+          example: efectivo
+        monto_recibido:     { type: number,  format: decimal, example: 100.00 }
+        cambio:             { type: number,  format: decimal, example: 4.50 }
+        estado:
+          type: string
+          enum: [completada, cancelada, devolucion]
+          example: completada
+        motivo_cancelacion: { type: string,  nullable: true }
+        id_corte:           { type: integer, nullable: true }
+        usuarios:
+          type: object
+          properties:
+            nombre: { type: string, example: "María López" }
+        detalle_venta:
+          type: array
+          items:
+            $ref: '#/components/schemas/DetalleVenta'
+
+    MovimientoInventario:
+      type: object
+      properties:
+        id_movimiento:  { type: integer, example: 34 }
+        id_producto:    { type: integer, example: 7 }
+        tipo:
+          type: string
+          enum: [entrada, salida, ajuste, devolucion]
+          example: entrada
+        cantidad:       { type: integer, example: 50 }
+        stock_anterior: { type: integer, example: 10 }
+        stock_nuevo:    { type: integer, example: 60 }
+        id_usuario:     { type: integer, example: 1 }
+        id_venta:       { type: integer, nullable: true }
+        observacion:    { type: string,  nullable: true }
+        fecha_hora:     { type: string,  format: date-time }
+
+    ProductoInventario:
+      allOf:
+        - $ref: '#/components/schemas/Producto'
+        - type: object
+          properties:
+            estado:
+              type: string
+              enum: [normal, bajo, agotado]
+              example: bajo
+              description: >
+                normal = stock_actual > stock_minimo;
+                bajo   = 0 < stock_actual ≤ stock_minimo;
+                agotado = stock_actual = 0
+
+    CorteCaja:
+      type: object
+      properties:
+        id_corte:                { type: integer, example: 5 }
+        fecha_corte:             { type: string,  format: date, example: "2026-06-24" }
+        fecha_apertura:          { type: string,  format: date-time }
+        fecha_cierre:            { type: string,  format: date-time, nullable: true }
+        id_usuario:              { type: integer, example: 1 }
+        total_ventas_sistema:    { type: number,  format: decimal, example: 3240.00 }
+        total_efectivo_sistema:  { type: number,  format: decimal, example: 1850.00 }
+        total_tarjeta_sistema:   { type: number,  format: decimal, example: 1390.00 }
+        total_devoluciones:      { type: number,  format: decimal, example: 120.00 }
+        monto_contado_fisico:    { type: number,  format: decimal, example: 1900.00, nullable: true }
+        diferencia:
+          type: number
+          format: decimal
+          example: 50.00
+          nullable: true
+          description: >
+            Calculado automáticamente por PostgreSQL como
+            (monto_contado_fisico − total_efectivo_sistema). Campo GENERATED ALWAYS AS.
+        observaciones:           { type: string,  nullable: true }
+        estado:
+          type: string
+          enum: [abierto, cerrado]
+          example: cerrado
+        num_ventas:
+          type: integer
+          example: 28
+          description: Ventas completadas. Calculado por el service, no persistido.
+        num_canceladas:
+          type: integer
+          example: 2
+          description: Ventas canceladas. Calculado por el service, no persistido.
+        usuarios:
+          type: object
+          properties:
+            nombre: { type: string, example: "Administrador" }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Security global (todos los endpoints salvo /auth/login)
+# ──────────────────────────────────────────────────────────────────────────────
+security:
+  - bearerAuth: []
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Tags
+# ──────────────────────────────────────────────────────────────────────────────
+tags:
+  - name: Auth
+    description: Autenticación y sesión
+  - name: Productos
+    description: Catálogo de productos
+  - name: Ventas
+    description: Registro y consulta de ventas
+  - name: Inventario
+    description: Control de stock y movimientos
+  - name: Corte de Caja
+    description: Apertura, cierre e historial de cortes diarios
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Paths
+# ──────────────────────────────────────────────────────────────────────────────
+paths:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # AUTH
+  # ═══════════════════════════════════════════════════════════════════════════
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Iniciar sesión
+      description: >
+        Autentica al usuario con email y contraseña.
+        Devuelve un JWT válido por **10 horas** y los datos públicos del usuario.
+      security: []   # único endpoint sin autenticación
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: admin@papeleria.local
+                password:
+                  type: string
+                  format: password
+                  example: "Secreta123"
+            examples:
+              administrador:
+                summary: Login de administrador
+                value:
+                  email: admin@papeleria.local
+                  password: "Secreta123"
+              cajero:
+                summary: Login de cajero
+                value:
+                  email: cajero@papeleria.local
+                  password: "Cajero456"
+      responses:
+        '200':
+          description: Sesión iniciada correctamente
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: object
+                    properties:
+                      token:
+                        type: string
+                        example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                      usuario:
+                        type: object
+                        properties:
+                          id:     { type: integer, example: 1 }
+                          nombre: { type: string,  example: "Administrador" }
+                          email:  { type: string,  example: "admin@papeleria.local" }
+                          rol:    { type: string,  example: "administrador" }
+        '401':
+          description: Credenciales incorrectas
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error401' }
+              example:
+                success: false
+                error: "Credenciales inválidas"
+        '403':
+          description: Usuario inactivo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error403' }
+              example:
+                success: false
+                error: "Usuario inactivo"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PRODUCTOS
+  # ═══════════════════════════════════════════════════════════════════════════
+  /productos:
+    post:
+      tags: [Productos]
+      summary: Crear producto
+      description: >
+        Registra un nuevo producto en el catálogo.
+        Requiere autenticación (cualquier rol).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nombre, codigo_barras, precio_compra, precio_venta]
+              properties:
+                nombre:        { type: string,  example: "Cuaderno universitario 100 hojas" }
+                codigo_barras: { type: string,  example: "7501000000007" }
+                descripcion:   { type: string,  example: "Raya, pasta dura" }
+                id_categoria:  { type: integer, example: 1 }
+                precio_compra: { type: number,  example: 18.50 }
+                precio_venta:  { type: number,  example: 35.00 }
+                stock_actual:  { type: integer, example: 50,  default: 0 }
+                stock_minimo:  { type: integer, example: 10,  default: 5 }
+      responses:
+        '201':
+          description: Producto creado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:    { $ref: '#/components/schemas/Producto' }
+        '400':
+          description: Validación fallida
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error400' }
+              examples:
+                codigo_duplicado:
+                  value: { success: false, error: "El código de barras ya existe" }
+                precio_invalido:
+                  value: { success: false, error: "El precio de venta debe ser mayor a 0" }
+        '401': { description: No autenticado,    content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+
+    get:
+      tags: [Productos]
+      summary: Listar / buscar productos
+      description: >
+        Devuelve todos los productos activos.
+        El parámetro `q` filtra por nombre o código de barras (búsqueda parcial, case-insensitive).
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: Texto para buscar en nombre o código de barras
+          schema:
+            type: string
+            example: "cuaderno"
+      responses:
+        '200':
+          description: Lista de productos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Producto' }
+              example:
+                success: true
+                data:
+                  - id_producto: 7
+                    codigo_barras: "7501000000007"
+                    nombre: "Cuaderno universitario 100 hojas"
+                    precio_venta: 35.00
+                    stock_actual: 48
+                    stock_minimo: 10
+                    activo: true
+        '401': { description: No autenticado, content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+
+  /productos/barcode/{codigo}:
+    get:
+      tags: [Productos]
+      summary: Buscar por código de barras
+      description: >
+        Localiza un producto activo por su código de barras exacto.
+        Utilizado por el escáner del POS para agregar productos al carrito.
+      parameters:
+        - name: codigo
+          in: path
+          required: true
+          schema: { type: string, example: "7501000000007" }
+      responses:
+        '200':
+          description: Producto encontrado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:    { $ref: '#/components/schemas/Producto' }
+        '404':
+          description: Código de barras no registrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error404' }
+              example: { success: false, error: "Producto no encontrado" }
+        '401': { description: No autenticado, content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+
+  /productos/{id}:
+    get:
+      tags: [Productos]
+      summary: Obtener producto por ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, example: 7 }
+      responses:
+        '200':
+          description: Producto encontrado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:    { $ref: '#/components/schemas/Producto' }
+        '404':
+          description: Producto no encontrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error404' }
+        '401': { description: No autenticado, content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+
+    put:
+      tags: [Productos]
+      summary: Actualizar producto
+      description: >
+        Actualización parcial (PATCH semántico implementado con PUT).
+        Solo enviar los campos que se desean modificar.
+        **Requiere rol administrador.**
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, example: 7 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nombre:        { type: string,  example: "Cuaderno universitario 200 hojas" }
+                precio_venta:  { type: number,  example: 45.00 }
+                stock_minimo:  { type: integer, example: 15 }
+                activo:        { type: boolean, example: true }
+            examples:
+              actualizar_precio:
+                summary: Cambiar precio de venta
+                value: { precio_venta: 45.00 }
+              dar_de_baja:
+                summary: Desactivar producto
+                value: { activo: false }
+      responses:
+        '200':
+          description: Producto actualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:    { $ref: '#/components/schemas/Producto' }
+        '400': { description: Validación fallida,  content: { application/json: { schema: { $ref: '#/components/schemas/Error400' } } } }
+        '401': { description: No autenticado,       content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+        '403': { description: Rol insuficiente,     content: { application/json: { schema: { $ref: '#/components/schemas/Error403' } } } }
+        '404': { description: Producto no encontrado, content: { application/json: { schema: { $ref: '#/components/schemas/Error404' } } } }
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # VENTAS
+  # ═══════════════════════════════════════════════════════════════════════════
+  /ventas:
+    post:
+      tags: [Ventas]
+      summary: Registrar venta
+      description: |
+        Crea una venta completa: cabecera, detalle y descuento de stock.
+
+        **Flujo interno:**
+        1. Verifica stock disponible de cada producto
+        2. Valida autorizador si `descuento > 20%` del subtotal
+        3. Inserta cabecera en `ventas`
+        4. Inserta líneas en `detalle_venta`
+        5. Llama a RPC `decrementar_stock` por cada producto
+        6. Registra movimientos en `movimientos_inventario`
+
+        **Errores de negocio:**
+        - Stock insuficiente → 400 con el nombre del producto y el disponible exacto
+        - Descuento >20% sin autorizador → 400
+        - Autorizador sin rol administrador → 400
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  minItems: 1
+                  items: { $ref: '#/components/schemas/ItemVenta' }
+                metodo_pago:
+                  type: string
+                  enum: [efectivo, tarjeta, mixto]
+                  default: efectivo
+                monto_recibido:
+                  type: number
+                  minimum: 0
+                  example: 100.00
+                  description: Requerido cuando metodo_pago = efectivo o mixto
+                descuento:
+                  type: number
+                  minimum: 0
+                  default: 0
+                  example: 0
+                  description: Monto fijo de descuento en pesos
+                id_autorizador:
+                  type: integer
+                  example: 1
+                  description: Obligatorio cuando el descuento supera el 20% del subtotal
+            examples:
+              venta_efectivo:
+                summary: Venta en efectivo con dos productos
+                value:
+                  items:
+                    - { id_producto: 7,  cantidad: 2 }
+                    - { id_producto: 12, cantidad: 3 }
+                  metodo_pago: efectivo
+                  monto_recibido: 200.00
+                  descuento: 0
+              venta_tarjeta:
+                summary: Venta en tarjeta
+                value:
+                  items:
+                    - { id_producto: 7, cantidad: 1 }
+                  metodo_pago: tarjeta
+              venta_con_descuento:
+                summary: Venta con descuento del 15% (sin autorizador)
+                value:
+                  items:
+                    - { id_producto: 7, cantidad: 4 }
+                  metodo_pago: efectivo
+                  monto_recibido: 120.00
+                  descuento: 21.00
+              venta_descuento_mayor:
+                summary: Venta con descuento del 30% (requiere autorizador)
+                value:
+                  items:
+                    - { id_producto: 7, cantidad: 4 }
+                  metodo_pago: efectivo
+                  monto_recibido: 100.00
+                  descuento: 42.00
+                  id_autorizador: 1
+      responses:
+        '201':
+          description: Venta registrada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:    { $ref: '#/components/schemas/Venta' }
+              example:
+                success: true
+                data:
+                  id_venta: 12
+                  folio: "VTA-20260624-0012"
+                  subtotal: 95.50
+                  descuento: 0
+                  total: 95.50
+                  metodo_pago: efectivo
+                  monto_recibido: 100.00
+                  cambio: 4.50
+                  estado: completada
+        '400':
+          description: Error de negocio
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error400' }
+              examples:
+                stock_cero:
+                  summary: Producto sin stock
+                  value: { success: false, error: 'Stock insuficiente para "Bolígrafo azul": disponible 0' }
+                stock_insuficiente:
+                  summary: Cantidad pedida supera el stock
+                  value: { success: false, error: 'Stock insuficiente para "Lápiz HB": disponible 2' }
+                descuento_sin_autorizar:
+                  summary: Descuento alto sin autorizador
+                  value: { success: false, error: "Descuentos mayores al 20% requieren id_autorizador con rol administrador" }
+                autorizador_invalido:
+                  summary: Autorizador sin rol administrador
+                  value: { success: false, error: "El autorizador debe tener rol administrador" }
+        '401': { description: No autenticado, content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+
+    get:
+      tags: [Ventas]
+      summary: Listar ventas
+      description: Devuelve ventas con filtros opcionales. Ordenadas por fecha descendente.
+      parameters:
+        - name: fecha
+          in: query
+          description: "Filtrar por fecha exacta (formato: YYYY-MM-DD)"
+          schema: { type: string, format: date, example: "2026-06-24" }
+        - name: estado
+          in: query
+          description: Filtrar por estado
+          schema:
+            type: string
+            enum: [completada, cancelada, devolucion]
+        - name: id_corte
+          in: query
+          description: Filtrar por ID de corte de caja
+          schema: { type: integer, example: 5 }
+      responses:
+        '200':
+          description: Lista de ventas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Venta' }
+        '401': { description: No autenticado, content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+
+  /ventas/{id}:
+    get:
+      tags: [Ventas]
+      summary: Obtener venta con detalle completo
+      description: Devuelve la cabecera de la venta, los datos del cajero y todas las líneas del detalle con nombre y código de barras del producto.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, example: 12 }
+      responses:
+        '200':
+          description: Venta encontrada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:    { $ref: '#/components/schemas/Venta' }
+        '404':
+          description: Venta no encontrada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error404' }
+              example: { success: false, error: "Venta no encontrada" }
+        '401': { description: No autenticado, content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+
+  /ventas/{id}/ticket:
+    get:
+      tags: [Ventas]
+      summary: Descargar ticket PDF
+      description: Genera y descarga el ticket de venta en formato PDF.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, example: 12 }
+      responses:
+        '200':
+          description: Archivo PDF del ticket
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: 'attachment; filename="ticket-VTA-20260624-0012.pdf"'
+        '404': { description: Venta no encontrada, content: { application/json: { schema: { $ref: '#/components/schemas/Error404' } } } }
+        '401': { description: No autenticado,      content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+
+  /ventas/{id}/cancelar:
+    post:
+      tags: [Ventas]
+      summary: Cancelar venta
+      description: |
+        Cancela una venta completada y **reintegra el stock** de cada producto.
+
+        **Requiere rol administrador.**
+
+        Registra un movimiento de tipo `ajuste` en `movimientos_inventario`
+        por cada producto de la venta.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, example: 12 }
+      responses:
+        '200':
+          description: Venta cancelada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:    { $ref: '#/components/schemas/Venta' }
+              example:
+                success: true
+                data:
+                  id_venta: 12
+                  folio: "VTA-20260624-0012"
+                  estado: cancelada
+                  motivo_cancelacion: "Cancelada por administrador"
+        '400':
+          description: La venta ya está cancelada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error400' }
+              example: { success: false, error: "La venta ya está cancelada" }
+        '401': { description: No autenticado,   content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+        '403': { description: Rol insuficiente, content: { application/json: { schema: { $ref: '#/components/schemas/Error403' } } } }
+        '404': { description: Venta no encontrada, content: { application/json: { schema: { $ref: '#/components/schemas/Error404' } } } }
+
+  /ventas/{id}/devolucion:
+    post:
+      tags: [Ventas]
+      summary: Procesar devolución parcial
+      description: |
+        Registra la devolución de uno o más productos de una venta.
+
+        - Solo se devuelven los artículos incluidos en `items`.
+        - El stock de cada artículo devuelto se incrementa vía RPC `incrementar_stock`.
+        - Se registra un movimiento tipo `devolucion` por cada producto.
+        - El estado de la venta cambia a `devolucion`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, example: 12 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  minItems: 1
+                  items: { $ref: '#/components/schemas/ItemVenta' }
+            examples:
+              devolucion_parcial:
+                summary: Devolver 1 de 2 cuadernos comprados
+                value:
+                  items:
+                    - { id_producto: 7, cantidad: 1 }
+      responses:
+        '201':
+          description: Devolución procesada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:    { $ref: '#/components/schemas/Venta' }
+              example:
+                success: true
+                data:
+                  id_venta: 12
+                  folio: "VTA-20260624-0012"
+                  estado: devolucion
+        '400':
+          description: Error de negocio en devolución
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error400' }
+              examples:
+                cantidad_excedida:
+                  value: { success: false, error: "Cantidad a devolver (5) supera la vendida (2)" }
+                producto_ajeno:
+                  value: { success: false, error: "Producto 99 no pertenece a esta venta" }
+                venta_cancelada:
+                  value: { success: false, error: "No se puede devolver una venta cancelada" }
+        '401': { description: No autenticado,     content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+        '404': { description: Venta no encontrada, content: { application/json: { schema: { $ref: '#/components/schemas/Error404' } } } }
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # INVENTARIO
+  # ═══════════════════════════════════════════════════════════════════════════
+  /inventario:
+    get:
+      tags: [Inventario]
+      summary: Consultar niveles de inventario
+      description: |
+        Devuelve todos los productos con su stock actual y el campo calculado `estado`:
+
+        | estado   | condición |
+        |----------|-----------|
+        | `normal` | stock_actual > stock_minimo |
+        | `bajo`   | 0 < stock_actual ≤ stock_minimo |
+        | `agotado`| stock_actual = 0 |
+      responses:
+        '200':
+          description: Inventario con estados calculados
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ProductoInventario' }
+              example:
+                success: true
+                data:
+                  - id_producto: 7
+                    nombre: "Cuaderno universitario 100 hojas"
+                    stock_actual: 48
+                    stock_minimo: 10
+                    estado: normal
+                  - id_producto: 12
+                    nombre: "Bolígrafo azul"
+                    stock_actual: 3
+                    stock_minimo: 10
+                    estado: bajo
+                  - id_producto: 15
+                    nombre: "Goma blanca"
+                    stock_actual: 0
+                    stock_minimo: 5
+                    estado: agotado
+        '401': { description: No autenticado, content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+
+  /inventario/entrada:
+    post:
+      tags: [Inventario]
+      summary: Registrar entrada de mercancía
+      description: |
+        Incrementa el stock de un producto y registra el movimiento.
+
+        **Requiere rol administrador.**
+
+        Llama al RPC `incrementar_stock` de Supabase y registra un movimiento
+        de tipo `entrada` con `stock_anterior` y `stock_nuevo` (ambos NOT NULL).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id_producto, cantidad]
+              properties:
+                id_producto:
+                  type: integer
+                  minimum: 1
+                  example: 7
+                cantidad:
+                  type: integer
+                  minimum: 1
+                  example: 50
+                  description: Unidades a agregar al stock (debe ser > 0)
+                observacion:
+                  type: string
+                  maxLength: 500
+                  example: "Compra proveedor ABC — factura F-2026-001"
+            examples:
+              entrada_normal:
+                summary: Entrada de 50 cuadernos
+                value:
+                  id_producto: 7
+                  cantidad: 50
+                  observacion: "Compra proveedor ABC"
+              entrada_sin_obs:
+                summary: Entrada sin observación
+                value:
+                  id_producto: 12
+                  cantidad: 100
+      responses:
+        '201':
+          description: Movimiento de entrada registrado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:    { $ref: '#/components/schemas/MovimientoInventario' }
+              example:
+                success: true
+                data:
+                  id_movimiento: 34
+                  id_producto: 7
+                  tipo: entrada
+                  cantidad: 50
+                  stock_anterior: 10
+                  stock_nuevo: 60
+                  observacion: "Compra proveedor ABC"
+        '400':
+          description: Validación fallida
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error400' }
+              example: { success: false, error: "La cantidad debe ser un entero positivo" }
+        '401': { description: No autenticado,      content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+        '403': { description: Rol insuficiente,    content: { application/json: { schema: { $ref: '#/components/schemas/Error403' } } } }
+        '404': { description: Producto no encontrado, content: { application/json: { schema: { $ref: '#/components/schemas/Error404' } } } }
+
+  /inventario/movimientos:
+    get:
+      tags: [Inventario]
+      summary: Historial de movimientos
+      description: Devuelve la bitácora de cambios de stock. Ordenados por fecha descendente.
+      parameters:
+        - name: id_producto
+          in: query
+          description: Filtrar por producto
+          schema: { type: integer, example: 7 }
+        - name: tipo
+          in: query
+          description: Filtrar por tipo de movimiento
+          schema:
+            type: string
+            enum: [entrada, salida, ajuste, devolucion]
+        - name: desde
+          in: query
+          description: Fecha inicio (YYYY-MM-DD)
+          schema: { type: string, format: date, example: "2026-06-01" }
+        - name: hasta
+          in: query
+          description: Fecha fin (YYYY-MM-DD)
+          schema: { type: string, format: date, example: "2026-06-30" }
+      responses:
+        '200':
+          description: Historial de movimientos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/MovimientoInventario' }
+        '401': { description: No autenticado, content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # CORTE DE CAJA
+  # ═══════════════════════════════════════════════════════════════════════════
+  /corte-caja:
+    post:
+      tags: [Corte de Caja]
+      summary: Abrir corte del día
+      description: |
+        Abre el corte de caja para la fecha actual.
+        Solo se permite **un corte por día** (`fecha_corte UNIQUE`).
+
+        **Requiere rol administrador.**
+
+        No acepta body — la fecha y el usuario se toman del token JWT y del sistema.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Body vacío (no se requiere ningún campo)
+      responses:
+        '201':
+          description: Corte abierto
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:    { $ref: '#/components/schemas/CorteCaja' }
+              example:
+                success: true
+                data:
+                  id_corte: 5
+                  fecha_corte: "2026-06-24"
+                  fecha_apertura: "2026-06-24T08:00:00.000Z"
+                  id_usuario: 1
+                  estado: abierto
+                  total_ventas_sistema: 0
+        '400':
+          description: Ya existe un corte para hoy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error400' }
+              example: { success: false, error: "Ya existe un corte para hoy" }
+        '401': { description: No autenticado,   content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+        '403': { description: Rol insuficiente, content: { application/json: { schema: { $ref: '#/components/schemas/Error403' } } } }
+
+    get:
+      tags: [Corte de Caja]
+      summary: Historial de cortes
+      description: |
+        Lista todos los cortes de caja con filtros opcionales de fecha.
+        **Requiere rol administrador.**
+      parameters:
+        - name: desde
+          in: query
+          description: Fecha inicio (YYYY-MM-DD) — filtra por fecha_apertura
+          schema: { type: string, format: date, example: "2026-06-01" }
+        - name: hasta
+          in: query
+          description: Fecha fin (YYYY-MM-DD) — se extiende hasta las 23:59:59
+          schema: { type: string, format: date, example: "2026-06-30" }
+      responses:
+        '200':
+          description: Lista de cortes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/CorteCaja' }
+        '401': { description: No autenticado,   content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+        '403': { description: Rol insuficiente, content: { application/json: { schema: { $ref: '#/components/schemas/Error403' } } } }
+
+  /corte-caja/{id}:
+    get:
+      tags: [Corte de Caja]
+      summary: Obtener corte por ID
+      description: |
+        Devuelve el corte con las ventas asociadas (aquellas cuyo `id_corte` coincide).
+        **Requiere rol administrador.**
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, example: 5 }
+      responses:
+        '200':
+          description: Corte con ventas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/CorteCaja'
+                      - type: object
+                        properties:
+                          ventas:
+                            type: array
+                            items: { $ref: '#/components/schemas/Venta' }
+        '404': { description: Corte no encontrado, content: { application/json: { schema: { $ref: '#/components/schemas/Error404' } } } }
+        '401': { description: No autenticado,      content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+        '403': { description: Rol insuficiente,    content: { application/json: { schema: { $ref: '#/components/schemas/Error403' } } } }
+
+  /corte-caja/{id}/cerrar:
+    put:
+      tags: [Corte de Caja]
+      summary: Cerrar corte y descargar PDF
+      description: |
+        Cierra el corte de caja activo y devuelve el reporte en **PDF** como descarga.
+
+        **Requiere rol administrador.**
+
+        **Proceso interno:**
+        1. Verifica que el corte existe y está `abierto`
+        2. Consulta todas las ventas del período
+        3. Calcula totales por método de pago y estado
+        4. Actualiza `ventas.id_corte` en lote
+        5. Actualiza `corte_caja` con los totales calculados
+        6. PostgreSQL recalcula `diferencia` automáticamente (columna GENERATED)
+        7. Genera y envía el PDF del reporte
+
+        > **Nota:** `diferencia = monto_contado_fisico − total_efectivo_sistema`
+        > es calculado por PostgreSQL. El backend nunca la incluye en el UPDATE.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, example: 5 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [monto_contado_fisico]
+              properties:
+                monto_contado_fisico:
+                  type: number
+                  minimum: 0
+                  example: 1900.00
+                  description: Efectivo contado físicamente al cerrar el turno
+                observaciones:
+                  type: string
+                  example: "Cierre de turno matutino. Sin incidencias."
+            examples:
+              cierre_normal:
+                summary: Cierre sin diferencias
+                value:
+                  monto_contado_fisico: 1850.00
+                  observaciones: "Cierre de turno"
+              cierre_con_faltante:
+                summary: Cierre con faltante de $50
+                value:
+                  monto_contado_fisico: 1800.00
+                  observaciones: "Faltante de $50 — revisar ticket 0041"
+      responses:
+        '200':
+          description: Reporte PDF del corte cerrado
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: 'attachment; filename="corte-5.pdf"'
+        '400':
+          description: Error de negocio
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error400' }
+              examples:
+                ya_cerrado:
+                  value: { success: false, error: "El corte ya está cerrado" }
+                monto_negativo:
+                  value: { success: false, error: "El monto contado no puede ser negativo" }
+        '401': { description: No autenticado,     content: { application/json: { schema: { $ref: '#/components/schemas/Error401' } } } }
+        '403': { description: Rol insuficiente,   content: { application/json: { schema: { $ref: '#/components/schemas/Error403' } } } }
+        '404': { description: Corte no encontrado, content: { application/json: { schema: { $ref: '#/components/schemas/Error404' } } } }

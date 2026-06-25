@@ -1,0 +1,99 @@
+erDiagram
+
+    usuarios {
+        INT id_usuario PK
+        VARCHAR(60) nombre
+        VARCHAR(100) email
+        VARCHAR(255) password_hash
+        ENUM rol "cajero | administrador"
+        BOOLEAN activo
+        TIMESTAMP creado_en
+    }
+
+    categorias {
+        INT id_categoria PK
+        VARCHAR(80) nombre
+        TEXT descripcion
+    }
+
+    productos {
+        INT id_producto PK
+        VARCHAR(30) codigo_barras UK
+        VARCHAR(120) nombre
+        TEXT descripcion
+        INT id_categoria FK
+        DECIMAL precio_compra
+        DECIMAL precio_venta
+        INT stock_actual
+        INT stock_minimo
+        BOOLEAN activo
+        TIMESTAMP creado_en
+        TIMESTAMP actualizado_en
+        INT actualizado_por FK
+    }
+
+    ventas {
+        INT id_venta PK
+        VARCHAR(20) folio UK
+        TIMESTAMP fecha_hora
+        INT id_usuario FK
+        DECIMAL subtotal
+        DECIMAL descuento
+        DECIMAL total
+        ENUM metodo_pago "efectivo | tarjeta | mixto"
+        DECIMAL monto_recibido
+        DECIMAL cambio
+        ENUM estado "completada | cancelada | devolucion"
+        TEXT motivo_cancelacion
+        INT id_corte FK
+    }
+
+    detalle_venta {
+        INT id_detalle PK
+        INT id_venta FK
+        INT id_producto FK
+        INT cantidad
+        DECIMAL precio_unitario
+        DECIMAL descuento_linea
+        DECIMAL subtotal_linea
+    }
+
+    movimientos_inventario {
+        INT id_movimiento PK
+        INT id_producto FK
+        ENUM tipo "entrada | salida | ajuste | devolucion"
+        INT cantidad
+        INT stock_anterior
+        INT stock_nuevo
+        INT id_usuario FK
+        INT id_venta FK
+        TEXT observacion
+        TIMESTAMP fecha_hora
+    }
+
+    corte_caja {
+        INT id_corte PK
+        DATE fecha_corte
+        TIMESTAMP fecha_apertura
+        TIMESTAMP fecha_cierre
+        INT id_usuario FK
+        DECIMAL total_ventas_sistema
+        DECIMAL total_efectivo_sistema
+        DECIMAL total_tarjeta_sistema
+        DECIMAL total_devoluciones
+        DECIMAL monto_contado_fisico
+        DECIMAL diferencia
+        TEXT observaciones
+        ENUM estado "abierto | cerrado"
+    }
+
+    usuarios       ||--o{ ventas                 : "registra"
+    usuarios       ||--o{ corte_caja             : "realiza"
+    usuarios       ||--o{ movimientos_inventario : "genera"
+    usuarios       ||--o{ productos              : "actualiza"
+    categorias     ||--o{ productos              : "clasifica"
+    ventas         ||--|{ detalle_venta          : "contiene"
+    productos      ||--o{ detalle_venta          : "aparece_en"
+    productos      ||--o{ movimientos_inventario : "afecta"
+    ventas         ||--o{ movimientos_inventario : "origina"
+    corte_caja     ||--o{ ventas                 : "agrupa"

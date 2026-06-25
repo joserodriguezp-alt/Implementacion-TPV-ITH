@@ -1,0 +1,8 @@
+{
+  "_instrucciones": "Agrega estas dos dependencias a tu package.json existente con: npm install swagger-ui-express yamljs",
+
+  "dependencies": {
+    "swagger-ui-express": "^5.0.1",
+    "yamljs":             "^0.3.0"
+  }
+}
