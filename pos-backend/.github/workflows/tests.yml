@@ -1,0 +1,46 @@
+# .github/workflows/tests.yml
+#
+# Ejecuta las pruebas Jest automáticamente en cada push a main
+# y en cada Pull Request que apunte a main.
+#
+# Stack: Node.js 20 LTS · Jest 29 · Babel (ESM → CJS)
+
+name: Pruebas Jest
+
+on:
+  push:
+    branches: [main]          # corre en cada push directo a main
+  pull_request:
+    branches: [main]          # corre cuando se abre/actualiza un PR a main
+
+jobs:
+  test:
+    name: Ejecutar pruebas
+    runs-on: ubuntu-latest    # runner gratuito de GitHub Actions
+
+    defaults:
+      run:
+        working-directory: pos-backend   # todas las órdenes corren aquí
+
+    steps:
+      # 1. Descargar el código del repositorio
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      # 2. Instalar Node.js 20 LTS (mismo que en desarrollo y producción)
+      - name: Configurar Node.js 20 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'                          # cachea node_modules entre runs
+          cache-dependency-path: pos-backend/package-lock.json
+
+      # 3. Instalar dependencias (incluyendo babel-jest y @babel/preset-env)
+      - name: Instalar dependencias
+        run: npm install
+
+      # 4. Correr las pruebas
+      #    Babel transforma ESM → CJS antes de que Jest ejecute cada archivo,
+      #    lo que permite que jest.mock() intercepte los módulos correctamente.
+      - name: Correr pruebas Jest
+        run: npm test
